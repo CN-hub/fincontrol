@@ -4,7 +4,7 @@ session_start();
 // ==========================================
 // CONFIGURAÇÃO DO SISTEMA
 // ==========================================
-define('SISTEMA_VERSAO', '2.1.0');
+define('SISTEMA_VERSAO', '1.2');
 define('SISTEMA_NOME', 'FinControl');
 
 // ==========================================
