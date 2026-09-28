@@ -1,0 +1,58 @@
+{
+    "contas_parceladas": [
+        {
+            "id": 1,
+            "descricao": "Notebook Novo",
+            "valor_total": "5000.00",
+            "num_parcelas": 24,
+            "parcelas_pagas": 1,
+            "valor_parcela": "208.33",
+            "proximo_vencimento": "2023-11-15",
+            "status": "Ativo",
+            "created_at": "2026-09-27 22:54:35"
+        },
+        {
+            "id": 2,
+            "descricao": "Geladeira",
+            "valor_total": "3000.00",
+            "num_parcelas": 12,
+            "parcelas_pagas": 12,
+            "valor_parcela": "250.00",
+            "proximo_vencimento": null,
+            "status": "Concluído",
+            "created_at": "2026-09-27 22:54:35"
+        },
+        {
+            "id": 3,
+            "descricao": "Notebook Novo",
+            "valor_total": "5000.00",
+            "num_parcelas": 24,
+            "parcelas_pagas": 2,
+            "valor_parcela": "208.33",
+            "proximo_vencimento": "2026-11-12",
+            "status": "Ativo",
+            "created_at": "2026-09-27 23:19:09"
+        },
+        {
+            "id": 4,
+            "descricao": "Geladeira",
+            "valor_total": "3000.00",
+            "num_parcelas": 12,
+            "parcelas_pagas": 11,
+            "valor_parcela": "250.00",
+            "proximo_vencimento": "2026-10-02",
+            "status": "Ativo",
+            "created_at": "2026-09-27 23:19:09"
+        }
+    ],
+    "usuarios": [
+        {
+            "id": 1,
+            "username": "Dev",
+            "password": "$2y$10$26JnLGuq7Xq06Dl6k06WkO3wzGa0usaVa5aS18yY7IE9IeyzbG.yW",
+            "nome_completo": "Desenvolvedor",
+            "email": "dev@fincontrol.com",
+            "created_at": "2026-09-27 23:20:55"
+        }
+    ]
+}
