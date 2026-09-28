@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinControl v2.1.0 - Sistema Financeiro</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+    darkMode: 'class',
+    theme: {
+        extend: {
+            colors: {
+                palette: {
+                    bgMain: '#FBFCFC',        // Fundo principal claro
+                    bgAlt: '#F6F2E8',         // Fundo alternativo claro
+                    surface: '#FFFFFF',        // Cards/superfícies
+                    navy1: '#0E2340',         // Azul institucional
+                    navy2: '#0C1C35',         // Azul secundário
+                    navy3: '#0A1427',         // Texto escuro (também fundo dark)
+                    black: '#08090F',         // Contraste máximo / fundo dark principal
+                    grayText: '#526071',      // Texto secundário claro
+                    goldDark: '#B79B68',      // Dourado escuro
+                    gold: '#D4BC83',          // Dourado principal (destaque)
+                    goldLight: '#ECDEAB',     // Dourado claro
+                    border: '#DDD7C8',        // Bordas tema claro
+                    borderDark: '#1A2942'     // Bordas tema escuro
+                }
+            }
+        }
+    }
+}
+</script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* Toggle 3D com paleta dourada */
+.toggle-3d-light { background: linear-gradient(135deg, #FFFFFF, #ECDEAB); box-shadow: inset -4px -4px 8px rgba(255,255,255,0.9), inset 4px 4px 8px rgba(183,155,104,0.25), 0 8px 16px rgba(14,35,64,0.15); }
+.toggle-3d-dark { background: linear-gradient(135deg, #0E2340, #08090F); box-shadow: inset -4px -4px 8px rgba(212,188,131,0.08), inset 4px 4px 8px rgba(0,0,0,0.6), 0 8px 16px rgba(0,0,0,0.4); }
+.toggle-inner-light { background: linear-gradient(135deg, #D4BC83, #B79B68); box-shadow: 0 0 12px rgba(212,188,131,0.6); }
+.toggle-inner-dark { background: linear-gradient(135deg, #ECDEAB, #D4BC83); box-shadow: 0 0 12px rgba(236,222,171,0.5); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D4BC83; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #B79B68; }
+
+/* Animações */
+.animate-in { animation: fadeIn .3s ease-in-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Drop zone */
+.drop-zone { border: 2px dashed #D4BC83; transition: all .3s; }
+.drop-zone.active { border-color: #B79B68; background: rgba(212,188,131,.1); }
+
+/* Base */
+body { background-color: #FBFCFC; color: #0A1427; transition: background-color .3s, color .3s; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+html.dark body { background-color: #08090F; color: #FBFCFC; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ============================================================
+// CONFIGURAÇÕES
+// ============================================================
+const VERSAO = '2.1.0';
+const SISTEMA_NOME = 'FinControl';
+const LS_KEYS = {
+    users: 'fincontrol_users',
+    installments: 'fincontrol_installments',
+    backups: 'fincontrol_backups',
+    session: 'fincontrol_session',
+    lastAutoBackup: 'fincontrol_last_auto_backup',
+    theme: 'fincontrol_theme',
+    backupPrefix: 'fincontrol_backup_'
+};
+
+// ============================================================
+// HASH DE SENHA
+// ============================================================
+async function hashPassword(password) {
+    const data = new TextEncoder().encode(password + 'fincontrol_salt_v2');
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
+// STORAGE (localStorage)
+// ============================================================
+const DB = {
+    get(key, fallback = []) {
+        try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+        catch { return fallback; }
+    },
+    set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } },
+    remove(key) { localStorage.removeItem(key); },
+
+    getUsers() { return this.get(LS_KEYS.users, []); },
+    setUsers(u) { return this.set(LS_KEYS.users, u); },
+    findUser(username) { return this.getUsers().find(u => u.username.toLowerCase() === username.toLowerCase()); },
+    async createUser({ username, password, nome, email }) {
+        const users = this.getUsers();
+        if (users.find(u => u.username.toLowerCase() === username.toLowerCase())) return { error: 'Usuário já cadastrado.' };
+        const hash = await hashPassword(password);
+        users.push({ id: Date.now(), username, password: hash, nome_completo: nome, email, created_at: new Date().toISOString() });
+        this.setUsers(users);
+        return { success: true };
+    },
+
+    getInstallments() { return this.get(LS_KEYS.installments, []); },
+    setInstallments(i) { return this.set(LS_KEYS.installments, i); },
+    addInstallment({ descricao, numParcelas, valorTotal }) {
+        const list = this.getInstallments();
+        const np = parseInt(numParcelas);
+        const vt = parseFloat(valorTotal);
+        if (np <= 0 || vt <= 0) return { error: 'Valores inválidos.' };
+        const prox = new Date();
+        prox.setMonth(prox.getMonth() + 1);
+        list.unshift({
+            id: Date.now(), descricao, valor_total: vt, num_parcelas: np, parcelas_pagas: 0,
+            valor_parcela: vt / np, proximo_vencimento: prox.toISOString().split('T')[0],
+            status: 'Ativo', created_at: new Date().toISOString()
+        });
+        this.setInstallments(list);
+        return { success: true };
+    },
+    baixaParcela(id) {
+        const list = this.getInstallments();
+        const idx = list.findIndex(i => i.id === id);
+        if (idx === -1) return { error: 'Item não encontrado.' };
+        const item = list[idx];
+        const novasPagas = item.parcelas_pagas + 1;
+        const concluido = novasPagas >= item.num_parcelas;
+        item.parcelas_pagas = novasPagas;
+        item.status = concluido ? 'Concluído' : 'Ativo';
+        if (concluido) item.proximo_vencimento = null;
+        else {
+            const d = new Date(item.proximo_vencimento);
+            d.setMonth(d.getMonth() + 1);
+            item.proximo_vencimento = d.toISOString().split('T')[0];
+        }
+        list[idx] = item;
+        this.setInstallments(list);
+        return { success: true };
+    },
+
+    getBackups() { return this.get(LS_KEYS.backups, []); },
+    setBackups(b) { return this.set(LS_KEYS.backups, b); },
+    createBackup(tipo = 'Manual') {
+        const data = {
+            contas_parceladas: this.getInstallments(),
+            usuarios: this.getUsers(),
+            _meta: { gerado_em: new Date().toISOString(), versao: VERSAO, sistema: SISTEMA_NOME, tipo }
+        };
+        const nome = `backup_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}_${tipo.toLowerCase()}.json`;
+        const conteudo = JSON.stringify(data, null, 2);
+        const id = Date.now();
+        localStorage.setItem(LS_KEYS.backupPrefix + id, conteudo);
+        const lista = this.getBackups();
+        lista.unshift({ id, nome_arquivo: nome, tamanho: (conteudo.length / 1024).toFixed(2) + ' KB', tipo, created_at: new Date().toISOString() });
+        const autoCount = lista.filter(b => b.tipo === 'Automático').length;
+        if (autoCount > 10) {
+            const autoList = lista.filter(b => b.tipo === 'Automático').slice(10);
+            autoList.forEach(b => localStorage.removeItem(LS_KEYS.backupPrefix + b.id));
+            this.setBackups(lista.filter(b => !autoList.includes(b)));
+        } else this.setBackups(lista);
+        return { success: true, nome, tamanho: (conteudo.length / 1024).toFixed(2) + ' KB' };
+    },
+    deleteBackup(id) { localStorage.removeItem(LS_KEYS.backupPrefix + id); this.setBackups(this.getBackups().filter(b => b.id !== id)); return { success: true }; },
+    getBackupContent(id) { return localStorage.getItem(LS_KEYS.backupPrefix + id); },
+    importData(dados, modo = 'merge') {
+        if (!dados || typeof dados !== 'object') return { error: 'Arquivo inválido.' };
+        if (!dados.contas_parceladas && !dados.usuarios) return { error: 'Arquivo não contém dados válidos.' };
+        let importados = 0;
+        if (Array.isArray(dados.contas_parceladas)) {
+            let atual = modo === 'replace' ? [] : this.getInstallments();
+            dados.contas_parceladas.forEach(item => {
+                if (atual.find(a => a.descricao === item.descricao && a.valor_total === item.valor_total)) return;
+                atual.push({ ...item, id: item.id || Date.now() + Math.random() });
+                importados++;
+            });
+            this.setInstallments(atual);
+        }
+        if (Array.isArray(dados.usuarios)) {
+            const users = this.getUsers();
+            dados.usuarios.forEach(u => {
+                if (users.find(x => x.username.toLowerCase() === (u.username||'').toLowerCase())) return;
+                users.push(u);
+            });
+            this.setUsers(users);
+        }
+        return { success: true, importados, modo };
+    }
+};
+
+function downloadFile(content, filename, mime = 'application/json') {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// FERIADOS
+// ============================================================
+function calcularPascoa(ano) {
+    const a = ano % 19, b = Math.floor(ano / 100), c = ano % 100;
+    const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mes = Math.floor((h + l - 7 * m + 114) / 31);
+    const dia = ((h + l - 7 * m + 114) % 31) + 1;
+    return `${ano}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+}
+function getFeriados(ano) {
+    const tsP = new Date(calcularPascoa(ano) + 'T00:00:00').getTime();
+    const dOff = (d) => new Date(tsP + d * 86400000).toISOString().split('T')[0];
+    return {
+        [`${ano}-01-01`]: 'Confraternização Universal', [`${ano}-04-21`]: 'Tiradentes',
+        [`${ano}-05-01`]: 'Dia do Trabalho', [`${ano}-09-07`]: 'Independência do Brasil',
+        [`${ano}-10-12`]: 'Nossa Senhora Aparecida', [`${ano}-11-02`]: 'Finados',
+        [`${ano}-11-15`]: 'Proclamação da República', [`${ano}-11-20`]: 'Consciência Negra',
+        [`${ano}-12-25`]: 'Natal',
+        [dOff(-48)]: 'Carnaval (Segunda)', [dOff(-47)]: 'Carnaval (Terça)',
+        [dOff(-46)]: 'Quarta-feira de Cinzas', [dOff(-2)]: 'Sexta-feira Santa',
+        [dOff(60)]: 'Corpus Christi'
+    };
+}
+function getComemorativas(ano) {
+    return {
+        [`${ano}-03-08`]: 'Dia Internacional da Mulher', [`${ano}-03-15`]: 'Dia do Consumidor',
+        [`${ano}-04-01`]: 'Dia da Mentira', [`${ano}-04-22`]: 'Descobrimento do Brasil',
+        [`${ano}-05-11`]: 'Dia das Mães', [`${ano}-06-12`]: 'Dia dos Namorados',
+        [`${ano}-07-20`]: 'Dia do Amigo', [`${ano}-08-11`]: 'Dia do Estudante',
+        [`${ano}-08-22`]: 'Dia do Folclore', [`${ano}-09-21`]: 'Dia da Árvore',
+        [`${ano}-10-15`]: 'Dia do Professor', [`${ano}-10-31`]: 'Halloween',
+        [`${ano}-11-19`]: 'Dia da Bandeira', [`${ano}-12-24`]: 'Véspera de Natal',
+        [`${ano}-12-31`]: 'Véspera de Ano Novo'
+    };
+}
+
+// ============================================================
+// ÍCONES
+// ============================================================
+const Icon = ({ name, className }) => {
+    const I = {
+        dashboard: <path d="M3 3h7v9H3zm0 11h7v7H3zm11-11h7v5h-7zm0 7h7v9h-7z"/>,
+        calendar: <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/>,
+        wallet: <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4M3 5v14a2 2 0 0 0 2 2h16v-5M18 12a2 2 0 0 0 0 4h4v-4Z"/>,
+        settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></>,
+        plus: <path d="M5 12h14M12 5v14"/>,
+        x: <path d="M18 6 6 18M6 6l12 12"/>,
+        trendingUp: <path d="M22 7 13.5 15.5 8.5 10.5 2 17"/>,
+        dollar: <><line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+        fileText: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></>,
+        database: <><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></>,
+        menu: <><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></>,
+        download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></>,
+        upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></>,
+        trash: <><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></>,
+        logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></>,
+        lock: <><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>,
+        user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+        file: <><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></>,
+        refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></>,
+        chevronLeft: <polyline points="15 18 9 12 15 6"/>,
+        chevronRight: <polyline points="9 18 15 12 9 6"/>,
+        gift: <><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/></>,
+        info: <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>,
+        mail: <><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></>,
+        tag: <><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></>
+    };
+    return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{I[name]}</svg>;
+};
+
+const Theme3D = ({ isDark, toggle }) => (
+    <button onClick={toggle} aria-label={isDark ? "Tema claro" : "Tema escuro"}
+        className={`relative w-14 h-14 rounded-full flex items-center justify-center transition-all duration-500 focus:outline-none focus:ring-2 focus:ring-palette-gold ${isDark ? 'toggle-3d-dark' : 'toggle-3d-light'}`}>
+        <div className={`w-6 h-6 rounded-full transition-all duration-500 ${isDark ? 'toggle-inner-dark' : 'toggle-inner-light'}`} />
+    </button>
+);
+
+const Modal = ({ isOpen, onClose, title, children, isDark }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="dialog" aria-modal="true">
+            <div className={`${isDark ? 'bg-palette-navy1 border-palette-borderDark' : 'bg-palette-surface border-palette-border'} border rounded-2xl w-full max-w-lg p-6 shadow-2xl animate-in`}>
+                <div className={`flex justify-between items-center mb-6 border-b pb-4 ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                    <h2 className="text-xl font-bold">{title}</h2>
+                    <button onClick={onClose} aria-label="Fechar" className={`${isDark ? 'text-palette-gold' : 'text-palette-grayText'} hover:opacity-70`}><Icon name="x" className="w-6 h-6"/></button>
+                </div>
+                {children}
+            </div>
+        </div>
+    );
+};
+
+// ============================================================
+// TELA DE LOGIN
+// ============================================================
+function LoginScreen({ onLogin, isDark, toggleTheme }) {
+    const [modo, setModo] = useState('login');
+    const [f, setF] = useState({ username:'', password:'', confirmPassword:'', nome:'', email:'' });
+    const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
+    const [loading, setLoading] = useState(false);
+    const reset = () => { setF({ username:'', password:'', confirmPassword:'', nome:'', email:'' }); setError(''); setSuccess(''); };
+    const upd = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+    const handleLogin = async (e) => {
+        e.preventDefault(); setLoading(true); setError(''); setSuccess('');
+        try {
+            const user = DB.findUser(f.username);
+            if (!user) { setError('Usuário ou senha incorretos.'); setLoading(false); return; }
+            const hash = await hashPassword(f.password);
+            if (hash !== user.password) { setError('Usuário ou senha incorretos.'); setLoading(false); return; }
+            DB.set(LS_KEYS.session, { username: user.username, id: user.id, at: Date.now() });
+            onLogin(user.username);
+        } catch { setError('Erro ao processar login.'); }
+        setLoading(false);
+    };
+
+    const handleRegister = async (e) => {
+        e.preventDefault(); setError(''); setSuccess('');
+        if (f.password !== f.confirmPassword) { setError('As senhas não coincidem.'); return; }
+        if (f.password.length < 6) { setError('Senha deve ter 6+ caracteres.'); return; }
+        if (f.username.length < 3) { setError('Usuário deve ter 3+ caracteres.'); return; }
+        setLoading(true);
+        const res = await DB.createUser({ username: f.username, password: f.password, nome: f.nome, email: f.email });
+        if (res.success) { setSuccess('Conta criada! Faça login.'); setTimeout(() => { setModo('login'); reset(); }, 2000); }
+        else setError(res.error);
+        setLoading(false);
+    };
+
+    const bgClass = isDark ? 'bg-gradient-to-br from-palette-black via-palette-navy3 to-palette-navy1' : 'bg-gradient-to-br from-palette-bgMain via-palette-bgAlt to-palette-bgMain';
+    const cardBg = isDark ? 'bg-palette-navy1/90 border-palette-borderDark' : 'bg-palette-surface/95 border-palette-border';
+    const inputBg = isDark ? 'bg-palette-navy3 border-palette-borderDark text-palette-bgMain' : 'bg-palette-bgMain border-palette-border text-palette-navy3';
+    const txtMut = isDark ? 'text-palette-gold' : 'text-palette-grayText';
+    const tabBg = isDark ? 'bg-palette-navy3/60' : 'bg-palette-bgAlt';
+
+    return (
+        <div className={`min-h-screen flex items-center justify-center p-4 ${bgClass} transition-colors duration-300`}>
+            <div className="fixed top-4 right-4 z-10"><Theme3D isDark={isDark} toggle={toggleTheme}/></div>
+            <div className={`w-full max-w-md p-8 rounded-3xl backdrop-blur-xl border shadow-2xl animate-in ${cardBg}`}>
+                <div className="flex justify-center mb-6">
+                    <div className="p-4 bg-gradient-to-br from-palette-gold to-palette-goldDark rounded-2xl shadow-lg shadow-palette-gold/30">
+                        <Icon name="wallet" className="w-10 h-10 text-palette-navy3"/>
+                    </div>
+                </div>
+                <h1 className={`text-2xl font-bold text-center mb-1 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>FinControl</h1>
+                <div className="flex items-center justify-center gap-2 mb-6">
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${isDark ? 'border-palette-borderDark text-palette-gold bg-palette-navy3/60' : 'border-palette-border text-palette-grayText bg-palette-bgAlt'}`}>
+                        <Icon name="tag" className="w-3 h-3 inline mr-1"/>v{VERSAO}
+                    </span>
+                </div>
+                <p className={`text-center text-sm mb-6 ${txtMut}`}>{modo === 'login' ? 'Acesse sua conta' : 'Crie sua conta'}</p>
+
+                <div className={`flex rounded-xl p-1 mb-6 ${tabBg}`}>
+                    <button type="button" onClick={() => { setModo('login'); reset(); }}
+                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${modo === 'login' ? 'bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 shadow-md' : txtMut}`}>Entrar</button>
+                    <button type="button" onClick={() => { setModo('register'); reset(); }}
+                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${modo === 'register' ? 'bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 shadow-md' : txtMut}`}>Cadastrar</button>
+                </div>
+
+                {error && <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 text-sm text-center">{error}</div>}
+                {success && <div className="mb-4 p-3 bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-800 rounded-lg text-green-700 dark:text-green-300 text-sm text-center">{success}</div>}
+
+                <form onSubmit={modo === 'login' ? handleLogin : handleRegister} className="space-y-4">
+                    {modo === 'register' && (
+                        <div>
+                            <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>Nome Completo</label>
+                            <div className="relative">
+                                <Icon name="user" className={`w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 ${txtMut}`}/>
+                                <input type="text" value={f.nome} onChange={upd('nome')} placeholder="Seu nome" required
+                                    className={`w-full pl-11 pr-4 py-3 border rounded-xl outline-none focus:border-palette-gold transition-colors ${inputBg}`}/>
+                            </div>
+                        </div>
+                    )}
+                    <div>
+                        <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>Usuário</label>
+                        <div className="relative">
+                            <Icon name="user" className={`w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 ${txtMut}`}/>
+                            <input type="text" value={f.username} onChange={upd('username')} placeholder="Escolha um usuário" required
+                                className={`w-full pl-11 pr-4 py-3 border rounded-xl outline-none focus:border-palette-gold transition-colors ${inputBg}`}/>
+                        </div>
+                    </div>
+                    {modo === 'register' && (
+                        <div>
+                            <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>E-mail</label>
+                            <div className="relative">
+                                <Icon name="mail" className={`w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 ${txtMut}`}/>
+                                <input type="email" value={f.email} onChange={upd('email')} placeholder="seu@email.com"
+                                    className={`w-full pl-11 pr-4 py-3 border rounded-xl outline-none focus:border-palette-gold transition-colors ${inputBg}`}/>
+                            </div>
+                        </div>
+                    )}
+                    <div>
+                        <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>Senha</label>
+                        <div className="relative">
+                            <Icon name="lock" className={`w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 ${txtMut}`}/>
+                            <input type="password" value={f.password} onChange={upd('password')} placeholder="Mínimo 6 caracteres" required
+                                className={`w-full pl-11 pr-4 py-3 border rounded-xl outline-none focus:border-palette-gold transition-colors ${inputBg}`}/>
+                        </div>
+                    </div>
+                    {modo === 'register' && (
+                        <div>
+                            <label className={`block text-sm font-medium mb-2 ${isDark ? 'text-palette-bgMain' : 'text-palette-navy3'}`}>Confirmar Senha</label>
+                            <div className="relative">
+                                <Icon name="lock" className={`w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 ${txtMut}`}/>
+                                <input type="password" value={f.confirmPassword} onChange={upd('confirmPassword')} placeholder="Repita a senha" required
+                                    className={`w-full pl-11 pr-4 py-3 border rounded-xl outline-none focus:border-palette-gold transition-colors ${inputBg}`}/>
+                            </div>
+                        </div>
+                    )}
+                    <button type="submit" disabled={loading}
+                        className="w-full py-3 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 font-bold rounded-xl hover:opacity-90 shadow-lg shadow-palette-gold/30 disabled:opacity-50 transition-all">
+                        {loading ? 'Aguarde...' : (modo === 'login' ? 'Entrar' : 'Criar Conta')}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+}
+
+// ============================================================
+// CALENDÁRIO
+// ============================================================
+function CalendarView({ isDark }) {
+    const [dt, setDt] = useState(new Date());
+    const [sel, setSel] = useState(null);
+    const [installments] = useState(DB.getInstallments());
+    const ano = dt.getFullYear(); const mes = dt.getMonth() + 1;
+    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    const sem = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+    const feriados = getFeriados(ano);
+    const comemorativas = getComemorativas(ano);
+
+    const mudar = (d) => setDt(new Date(ano, mes - 1 + d, 1));
+    const primeiro = new Date(ano, mes - 1, 1).getDay();
+    const total = new Date(ano, mes, 0).getDate();
+    const dias = [];
+    for (let i = 0; i < primeiro; i++) dias.push(null);
+    for (let i = 1; i <= total; i++) dias.push(i);
+    const hj = new Date();
+    const isHoje = (d) => d === hj.getDate() && mes === (hj.getMonth() + 1) && ano === hj.getFullYear();
+    const getEv = (dia) => {
+        if (!dia) return { feriado:null, comemorativa:null, parcelas:[] };
+        const k = `${ano}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+        return { feriado: feriados[k] || null, comemorativa: comemorativas[k] || null, parcelas: installments.filter(p => p.proximo_vencimento === k && p.status !== 'Concluído') };
+    };
+    const evSel = sel ? getEv(sel) : null;
+
+    const cardBg = isDark ? 'bg-palette-navy1 border-palette-borderDark' : 'bg-palette-surface border-palette-border shadow-sm';
+    const txtMut = isDark ? 'text-palette-gold' : 'text-palette-grayText';
+    const btnBg = isDark ? 'bg-palette-navy3 text-palette-gold' : 'bg-palette-bgAlt text-palette-navy3';
+
+    return (
+        <div className="space-y-6 animate-in">
+            <div className={`p-6 rounded-2xl border ${cardBg}`}>
+                <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => mudar(-1)} className={`p-2 rounded-lg ${btnBg} hover:opacity-80`} aria-label="Anterior"><Icon name="chevronLeft" className="w-5 h-5"/></button>
+                        <h2 className="text-lg md:text-xl font-bold min-w-[180px] text-center">{meses[mes - 1]} {ano}</h2>
+                        <button onClick={() => mudar(1)} className={`p-2 rounded-lg ${btnBg} hover:opacity-80`} aria-label="Próximo"><Icon name="chevronRight" className="w-5 h-5"/></button>
+                        <button onClick={() => setDt(new Date())} className="px-3 py-2 text-sm bg-palette-gold/25 text-palette-goldDark dark:text-palette-gold rounded-lg hover:bg-palette-gold/40 transition-colors">Hoje</button>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs">
+                        <span className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-400"></div> Feriado</span>
+                        <span className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-purple-400"></div> Comemorativa</span>
+                        <span className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-palette-gold"></div> Vencimento</span>
+                    </div>
+                </div>
+                <div className="grid grid-cols-7 gap-1 md:gap-2 mb-2">
+                    {sem.map(d => <div key={d} className={`text-center text-xs font-bold py-2 ${txtMut}`}>{d}</div>)}
+                </div>
+                <div className="grid grid-cols-7 gap-1 md:gap-2">
+                    {dias.map((dia, i) => {
+                        const e = dia ? getEv(dia) : { feriado:null, comemorativa:null, parcelas:[] };
+                        const tem = e.feriado || e.comemorativa || e.parcelas.length > 0;
+                        const fim = [0, 6].includes(i % 7);
+                        return (
+                            <button key={i} onClick={() => dia && setSel(dia)} disabled={!dia}
+                                className={`min-h-[70px] md:min-h-[90px] p-1 md:p-2 rounded-xl border text-left transition-all hover:scale-[1.02] ${
+                                    !dia ? 'opacity-0 cursor-default' :
+                                    isHoje(dia) ? 'border-palette-gold bg-palette-gold/20 ring-2 ring-palette-gold' :
+                                    e.feriado ? 'border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-800' :
+                                    tem ? isDark ? 'border-palette-borderDark bg-palette-navy3/50' : 'border-palette-border bg-palette-bgAlt' :
+                                    isDark ? `border-palette-borderDark ${fim ? 'bg-palette-navy3/30' : 'bg-palette-navy3/10'}` : `border-palette-border ${fim ? 'bg-palette-bgAlt' : 'bg-palette-bgMain'}`
+                                }`}>
+                                <div className={`text-xs md:text-sm font-bold mb-1 ${e.feriado ? 'text-red-600 dark:text-red-400' : isHoje(dia) ? 'text-palette-goldDark dark:text-palette-gold' : ''}`}>{dia}</div>
+                                <div className="space-y-0.5 hidden md:block">
+                                    {e.feriado && <div className="text-[9px] bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1 rounded truncate">🔴 {e.feriado.substring(0,14)}</div>}
+                                    {e.comemorativa && <div className="text-[9px] bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-1 rounded truncate">💜 {e.comemorativa.substring(0,14)}</div>}
+                                    {e.parcelas.map((p, idx) => (
+                                        <div key={idx} className="text-[9px] bg-palette-gold/25 text-palette-goldDark dark:text-palette-gold px-1 rounded truncate">💰 {p.descricao.substring(0,12)}</div>
+                                    ))}
+                                </div>
+                                {tem && <div className="md:hidden flex gap-0.5 mt-1">
+                                    {e.feriado && <div className="w-1.5 h-1.5 rounded-full bg-red-400"/>}
+                                    {e.comemorativa && <div className="w-1.5 h-1.5 rounded-full bg-purple-400"/>}
+                                    {e.parcelas.length > 0 && <div className="w-1.5 h-1.5 rounded-full bg-palette-gold"/>}
+                                </div>}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+            {sel && evSel && (
+                <div className={`p-6 rounded-2xl border ${cardBg} animate-in`}>
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-bold">Eventos de {String(sel).padStart(2,'0')}/{String(mes).padStart(2,'0')}/{ano}</h3>
+                        <button onClick={() => setSel(null)} className={txtMut}><Icon name="x" className="w-5 h-5"/></button>
+                    </div>
+                    <div className="space-y-3">
+                        {evSel.feriado && (
+                            <div className="flex items-center gap-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
+                                <div className="p-2 bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg"><Icon name="info" className="w-5 h-5"/></div>
+                                <div><p className="font-bold text-red-700 dark:text-red-400">Feriado Nacional</p><p className="text-sm">{evSel.feriado}</p></div>
+                            </div>
+                        )}
+                        {evSel.comemorativa && (
+                            <div className="flex items-center gap-3 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-xl">
+                                <div className="p-2 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded-lg"><Icon name="gift" className="w-5 h-5"/></div>
+                                <div><p className="font-bold text-purple-700 dark:text-purple-400">Data Comemorativa</p><p className="text-sm">{evSel.comemorativa}</p></div>
+                            </div>
+                        )}
+                        {evSel.parcelas.map((p, i) => (
+                            <div key={i} className="flex items-center gap-3 p-3 bg-palette-gold/10 border border-palette-gold/40 rounded-xl">
+                                <div className="p-2 bg-palette-gold/30 text-palette-goldDark rounded-lg"><Icon name="dollar" className="w-5 h-5"/></div>
+                                <div><p className="font-bold text-palette-goldDark dark:text-palette-gold">Vencimento</p><p className="text-sm">{p.descricao} - R$ {parseFloat(p.valor_parcela).toFixed(2)}</p></div>
+                            </div>
+                        ))}
+                        {!evSel.feriado && !evSel.comemorativa && evSel.parcelas.length === 0 && (
+                            <p className={`${txtMut} text-sm text-center py-4`}>Nenhum evento neste dia.</p>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
+// APP PRINCIPAL
+// ============================================================
+function App() {
+    const [user, setUser] = useState(null);
+    const [checking, setChecking] = useState(true);
+    const [isDark, setIsDark] = useState(false);
+    const [tab, setTab] = useState('dashboard');
+    const [sideOpen, setSideOpen] = useState(false);
+    const [inst, setInst] = useState([]);
+    const [bkp, setBkp] = useState([]);
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ descricao:'', total:'', valorTotal:'' });
+    const [lastAuto, setLastAuto] = useState(null);
+    const [importModal, setImportModal] = useState(false);
+    const [importFile, setImportFile] = useState(null);
+    const [importModo, setImportModo] = useState('merge');
+    const [importLoading, setImportLoading] = useState(false);
+    const [importMsg, setImportMsg] = useState(null);
+    const [dragActive, setDragActive] = useState(false);
+    const fileInputRef = useRef(null);
+
+    useEffect(() => {
+        (async () => {
+            if (DB.getUsers().length === 0) {
+                await DB.createUser({ username: 'Dev', password: '123456', nome: 'Desenvolvedor', email: 'dev@fincontrol.com' });
+            }
+            const sess = DB.get(LS_KEYS.session, null);
+            if (sess && sess.username) setUser(sess.username);
+            const t = DB.get(LS_KEYS.theme, 'light');
+            setIsDark(t === 'dark');
+            const lastTs = DB.get(LS_KEYS.lastAutoBackup, null);
+            if (lastTs) setLastAuto(new Date(lastTs).toLocaleString('pt-BR'));
+            setChecking(false);
+        })();
+    }, []);
+
+    const refreshData = () => { setInst(DB.getInstallments()); setBkp(DB.getBackups()); };
+    useEffect(() => { if (user) refreshData(); }, [user]);
+    useEffect(() => { document.documentElement.classList.toggle('dark', isDark); DB.set(LS_KEYS.theme, isDark ? 'dark' : 'light'); }, [isDark]);
+
+    useEffect(() => {
+        if (!user) return;
+        const check = () => {
+            const last = DB.get(LS_KEYS.lastAutoBackup, null);
+            if (!last || (Date.now() - last) >= 3600000) {
+                DB.createBackup('Automático');
+                DB.set(LS_KEYS.lastAutoBackup, Date.now());
+                setLastAuto(new Date().toLocaleString('pt-BR'));
+                refreshData();
+            }
+        };
+        check();
+        const interval = setInterval(check, 3600000);
+        return () => clearInterval(interval);
+    }, [user]);
+
+    const toggle = () => setIsDark(!isDark);
+    const logout = () => { DB.remove(LS_KEYS.session); setUser(null); };
+    const handleLogin = (username) => { setUser(username); refreshData(); };
+    const baixa = (id) => { DB.baixaParcela(id); refreshData(); };
+    const addInst = (e) => {
+        e.preventDefault();
+        const r = DB.addInstallment({ descricao: form.descricao, numParcelas: form.total, valorTotal: form.valorTotal });
+        if (r.error) { alert(r.error); return; }
+        setModal(false); setForm({ descricao:'', total:'', valorTotal:'' }); refreshData();
+    };
+    const criarBkp = (tipo = 'Manual') => {
+        const r = DB.createBackup(tipo);
+        if (r.success) { refreshData(); alert(`Backup criado: ${r.nome}`); }
+    };
+    const delBkp = (id) => { if (!confirm('Excluir este backup?')) return; DB.deleteBackup(id); refreshData(); };
+    const exportarAtual = () => {
+        const data = { contas_parceladas: DB.getInstallments(), usuarios: DB.getUsers(), _meta: { gerado_em: new Date().toISOString(), versao: VERSAO, sistema: SISTEMA_NOME } };
+        downloadFile(JSON.stringify(data, null, 2), `fincontrol_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`);
+    };
+    const baixarBackup = (id) => {
+        const content = DB.getBackupContent(id);
+        const b = DB.getBackups().find(x => x.id === id);
+        if (content && b) downloadFile(content, b.nome_arquivo);
+    };
+    const handleImportSubmit = () => {
+        if (!importFile) { setImportMsg({ tipo:'error', texto:'Selecione um arquivo JSON.' }); return; }
+        if (!importFile.name.toLowerCase().endsWith('.json')) { setImportMsg({ tipo:'error', texto:'O arquivo deve ser .json' }); return; }
+        setImportLoading(true); setImportMsg(null);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const dados = JSON.parse(ev.target.result);
+                const r = DB.importData(dados, importModo);
+                if (r.success) {
+                    setImportMsg({ tipo:'success', texto:`Importação concluída! ${r.importados} registro(s).` });
+                    refreshData();
+                    setTimeout(() => { setImportModal(false); setImportFile(null); setImportMsg(null); }, 2500);
+                } else setImportMsg({ tipo:'error', texto: r.error });
+            } catch { setImportMsg({ tipo:'error', texto: 'Arquivo JSON inválido.' }); }
+            setImportLoading(false);
+        };
+        reader.onerror = () => { setImportMsg({ tipo:'error', texto:'Erro ao ler arquivo.' }); setImportLoading(false); };
+        reader.readAsText(importFile);
+    };
+    const handleFileDrop = (e) => {
+        e.preventDefault(); setDragActive(false);
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) { setImportFile(e.dataTransfer.files[0]); setImportMsg(null); }
+    };
+
+    const exportarRelatorio = (formato) => {
+        const dados = DB.getInstallments();
+        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+        if (formato === 'json') downloadFile(JSON.stringify(dados, null, 2), `relatorio_${ts}.json`);
+        else if (formato === 'csv') {
+            let csv = '\uFEFF';
+            csv += 'ID;Descrição;Valor Total;Nº Parcelas;Pagas;Valor Parcela;Vencimento;Status;Criado em\n';
+            dados.forEach(r => { csv += `${r.id};"${r.descricao}";${r.valor_total};${r.num_parcelas};${r.parcelas_pagas};${parseFloat(r.valor_parcela).toFixed(2)};${r.proximo_vencimento||'-'};${r.status};${r.created_at}\n`; });
+            downloadFile(csv, `relatorio_${ts}.csv`, 'text/csv;charset=utf-8');
+        } else if (formato === 'excel') {
+            let html = '\uFEFF<table border="1"><tr style="background:#D4BC83;color:#0A1427;"><th>ID</th><th>Descrição</th><th>Valor Total</th><th>Parcelas</th><th>Pagas</th><th>Valor Parcela</th><th>Vencimento</th><th>Status</th></tr>';
+            dados.forEach(r => { html += `<tr><td>${r.id}</td><td>${r.descricao}</td><td>${r.valor_total}</td><td>${r.num_parcelas}</td><td>${r.parcelas_pagas}</td><td>${parseFloat(r.valor_parcela).toFixed(2)}</td><td>${r.proximo_vencimento||'-'}</td><td>${r.status}</td></tr>`; });
+            html += '</table>';
+            downloadFile(html, `relatorio_${ts}.xls`, 'application/vnd.ms-excel;charset=utf-8');
+        } else if (formato === 'pdf') {
+            const win = window.open('', '_blank');
+            let html = `<html><head><title>Relatório - FinControl v${VERSAO}</title><style>body{font-family:Arial;padding:20px;color:#0A1427}h1{color:#0E2340;border-bottom:3px solid #D4BC83;padding-bottom:10px}table{width:100%;border-collapse:collapse;margin-top:20px}th{background:#0E2340;color:#D4BC83;padding:10px;text-align:left}td{padding:8px;border-bottom:1px solid #DDD7C8}tr:nth-child(even){background:#F6F2E8}@media print{button{display:none}}</style></head><body><button onclick="window.print()" style="padding:10px 20px;background:#D4BC83;color:#0A1427;border:none;border-radius:8px;cursor:pointer;margin-bottom:20px;font-weight:bold">🖨️ Imprimir/Salvar PDF</button><h1>Relatório Financeiro - FinControl v${VERSAO}</h1><p style="color:#526071">Gerado em: ${new Date().toLocaleString('pt-BR')}</p><table><tr><th>ID</th><th>Descrição</th><th>Valor Total</th><th>Parcelas</th><th>Pagas</th><th>Valor Parcela</th><th>Vencimento</th><th>Status</th></tr>`;
+            dados.forEach(r => { html += `<tr><td>${r.id}</td><td>${r.descricao}</td><td>R$ ${parseFloat(r.valor_total).toFixed(2)}</td><td>${r.num_parcelas}</td><td>${r.parcelas_pagas}</td><td>R$ ${parseFloat(r.valor_parcela).toFixed(2)}</td><td>${r.proximo_vencimento||'-'}</td><td>${r.status}</td></tr>`; });
+            html += '</table></body></html>';
+            win.document.write(html); win.document.close();
+        }
+    };
+
+    const bgCard = isDark ? 'bg-palette-navy1 border-palette-borderDark' : 'bg-palette-surface border-palette-border shadow-sm';
+    const txtMut = isDark ? 'text-palette-gold' : 'text-palette-grayText';
+    const sideBg = isDark ? 'bg-palette-navy2 border-palette-borderDark' : 'bg-palette-surface border-palette-border';
+    const inputBg = isDark ? 'bg-palette-navy3 border-palette-borderDark text-palette-bgMain' : 'bg-palette-bgMain border-palette-border text-palette-navy3';
+
+    const totAtivas = inst.filter(i => i.status === 'Ativo').length;
+    const totPago = inst.reduce((a, i) => a + (i.parcelas_pagas * parseFloat(i.valor_parcela)), 0);
+    const saldoDev = inst.reduce((a, i) => a + ((i.num_parcelas - i.parcelas_pagas) * parseFloat(i.valor_parcela)), 0);
+
+    const Dashboard = () => (
+        <div className="space-y-6 animate-in">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                {[
+                    { t:'Saldo Devedor', v:`R$ ${saldoDev.toFixed(2)}`, i:'dollar', c:'text-red-500 dark:text-red-400' },
+                    { t:'Total Pago', v:`R$ ${totPago.toFixed(2)}`, i:'trendingUp', c:'text-green-600 dark:text-green-400' },
+                    { t:'Parcelas Ativas', v: totAtivas, i:'calendar', c:'text-palette-goldDark dark:text-palette-gold' },
+                    { t:'Últ. Backup Auto', v: lastAuto || 'N/A', i:'database', c:'text-palette-navy1 dark:text-palette-goldLight' },
+                ].map((c, i) => (
+                    <div key={i} className={`p-5 md:p-6 rounded-2xl border ${bgCard} flex flex-col gap-3 hover:-translate-y-1 transition-transform`}>
+                        <div className="flex justify-between items-start">
+                            <span className={`text-sm font-medium ${txtMut}`}>{c.t}</span>
+                            <Icon name={c.i} className={`w-5 h-5 ${c.c}`}/>
+                        </div>
+                        <h3 className="text-xl md:text-2xl font-bold break-words">{c.v}</h3>
+                    </div>
+                ))}
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className={`lg:col-span-2 p-6 rounded-2xl border ${bgCard}`}>
+                    <h3 className="text-lg font-bold mb-4">Resumo das Parcelas</h3>
+                    {inst.length === 0 ? <p className={txtMut}>Nenhuma parcela cadastrada.</p> : inst.map(item => (
+                        <div key={item.id} className={`flex justify-between items-center border-b pb-2 mb-2 ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                            <div>
+                                <p className="font-medium text-sm">{item.descricao}</p>
+                                <p className={`text-xs ${txtMut}`}>Parcela {item.parcelas_pagas}/{item.num_parcelas}</p>
+                            </div>
+                            <div className="text-right">
+                                <p className="font-bold text-sm">R$ {parseFloat(item.valor_parcela).toFixed(2)}</p>
+                                <p className="text-xs text-palette-goldDark dark:text-palette-gold">{item.proximo_vencimento || 'Concluído'}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <div className={`p-6 rounded-2xl border ${bgCard}`}>
+                    <h3 className="text-lg font-bold mb-4">Ações Rápidas</h3>
+                    <button onClick={() => setModal(true)} className="w-full flex items-center justify-between p-4 bg-palette-gold/15 text-palette-goldDark dark:text-palette-gold rounded-xl hover:bg-palette-gold/30 mb-3 transition-colors">
+                        <span className="font-medium">Nova Conta</span><Icon name="plus" className="w-5 h-5"/>
+                    </button>
+                    <button onClick={() => criarBkp('Manual')} className="w-full flex items-center justify-between p-4 bg-palette-navy1/10 dark:bg-palette-navy3 text-palette-navy1 dark:text-palette-goldLight rounded-xl hover:bg-palette-navy1/20 dark:hover:bg-palette-navy3/80 transition-colors">
+                        <span className="font-medium">Backup Agora</span><Icon name="database" className="w-5 h-5"/>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
+    const Installments = () => (
+        <div className="space-y-6 animate-in">
+            <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Contas Parceladas</h2>
+                <button onClick={() => setModal(true)} className="flex items-center gap-2 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 px-4 py-2 rounded-xl font-bold shadow-lg shadow-palette-gold/30 hover:opacity-90 transition-opacity">
+                    <Icon name="plus" className="w-4 h-4"/> Nova
+                </button>
+            </div>
+            <div className={`p-4 md:p-6 rounded-2xl border ${bgCard} overflow-x-auto`}>
+                <table className="w-full text-left border-collapse min-w-[600px]">
+                    <thead>
+                        <tr className={`text-sm ${txtMut} border-b ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                            <th className="pb-3 font-medium">Descrição</th>
+                            <th className="pb-3 font-medium">Progresso</th>
+                            <th className="pb-3 font-medium">Valor</th>
+                            <th className="pb-3 font-medium">Vencimento</th>
+                            <th className="pb-3 font-medium">Status</th>
+                            <th className="pb-3 font-medium text-right">Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                        {inst.map(item => (
+                            <tr key={item.id} className={`border-b ${isDark ? 'border-palette-borderDark/50 hover:bg-palette-navy3/40' : 'border-palette-border hover:bg-palette-bgAlt'} transition-colors`}>
+                                <td className="py-4 font-medium">{item.descricao}</td>
+                                <td className="py-4">
+                                    <span className={txtMut}>{item.parcelas_pagas}/{item.num_parcelas}</span>
+                                    <div className={`w-24 h-2 rounded-full overflow-hidden mt-1 ${isDark ? 'bg-palette-navy3' : 'bg-palette-border'}`}>
+                                        <div className="h-full bg-gradient-to-r from-palette-gold to-palette-goldDark" style={{ width: `${(item.parcelas_pagas / item.num_parcelas) * 100}%` }}/>
+                                    </div>
+                                </td>
+                                <td className="py-4">R$ {parseFloat(item.valor_parcela).toFixed(2)}</td>
+                                <td className={`py-4 ${item.status === 'Concluído' ? 'text-green-600 dark:text-green-400' : 'text-palette-goldDark dark:text-palette-gold'}`}>{item.proximo_vencimento || 'Concluído'}</td>
+                                <td className="py-4">
+                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.status === 'Concluído' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-palette-gold/20 text-palette-goldDark dark:text-palette-gold'}`}>{item.status}</span>
+                                </td>
+                                <td className="py-4 text-right">
+                                    {item.status !== 'Concluído' && (
+                                        <button onClick={() => baixa(item.id)} className="px-4 py-1.5 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 rounded-lg text-xs font-bold hover:opacity-90 transition-opacity">Dar Baixa</button>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
+    const Reports = () => (
+        <div className="space-y-6 animate-in">
+            <h2 className="text-xl font-bold">Relatórios e Exportação</h2>
+            <div className={`p-6 rounded-2xl border ${bgCard}`}>
+                <h3 className="text-lg font-bold mb-4">Exportar Relatório</h3>
+                <p className={`text-sm ${txtMut} mb-6`}>Escolha o formato para baixar os dados.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                        { f:'pdf', t:'PDF', d:'Documento para impressão', c:'from-red-500 to-orange-500', i:'fileText' },
+                        { f:'excel', t:'Excel', d:'Planilha eletrônica', c:'from-green-600 to-emerald-500', i:'file' },
+                        { f:'csv', t:'CSV', d:'Separado por vírgula', c:'from-palette-gold to-palette-goldDark', i:'fileText' },
+                        { f:'json', t:'JSON', d:'Formato estruturado', c:'from-palette-navy1 to-palette-navy3', i:'file' },
+                    ].map(o => (
+                        <button key={o.f} onClick={() => exportarRelatorio(o.f)} className={`p-6 rounded-2xl bg-gradient-to-br ${o.c} text-white text-left hover:scale-105 transition-transform shadow-lg`}>
+                            <Icon name={o.i} className="w-8 h-8 mb-4"/>
+                            <h4 className="font-bold text-lg mb-1">{o.t}</h4>
+                            <p className="text-xs opacity-90">{o.d}</p>
+                            <div className="flex items-center gap-2 mt-4 text-sm font-medium"><Icon name="download" className="w-4 h-4"/> Baixar</div>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+
+    const Backups = () => (
+        <div className="space-y-6 animate-in">
+            <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                <div>
+                    <h2 className="text-xl font-bold">Gerenciamento de Backups</h2>
+                    <p className={`text-sm ${txtMut}`}>Backup automático a cada 1 hora</p>
+                </div>
+                <button onClick={() => criarBkp('Manual')} className="flex items-center justify-center gap-2 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 px-4 py-2 rounded-xl font-bold shadow-lg shadow-palette-gold/30 hover:opacity-90">
+                    <Icon name="plus" className="w-4 h-4"/> Novo Backup
+                </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className={`p-6 rounded-2xl border ${bgCard}`}>
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="p-3 bg-palette-gold/20 text-palette-goldDark dark:text-palette-gold rounded-xl"><Icon name="download" className="w-6 h-6"/></div>
+                        <div>
+                            <h3 className="font-bold text-lg">Exportar Backup</h3>
+                            <p className={`text-xs ${txtMut}`}>Baixa um arquivo JSON com todos os dados atuais</p>
+                        </div>
+                    </div>
+                    <button onClick={exportarAtual}
+                        className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 rounded-xl font-bold hover:opacity-90 shadow-lg shadow-palette-gold/30">
+                        <Icon name="download" className="w-5 h-5"/> Baixar Backup Atual (.json)
+                    </button>
+                </div>
+                <div className={`p-6 rounded-2xl border ${bgCard}`}>
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="p-3 bg-palette-navy1/15 dark:bg-palette-navy3 text-palette-navy1 dark:text-palette-goldLight rounded-xl"><Icon name="upload" className="w-6 h-6"/></div>
+                        <div>
+                            <h3 className="font-bold text-lg">Importar Backup</h3>
+                            <p className={`text-xs ${txtMut}`}>Restaura dados a partir de um arquivo JSON</p>
+                        </div>
+                    </div>
+                    <button onClick={() => { setImportModal(true); setImportMsg(null); setImportFile(null); }}
+                        className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-palette-navy1 to-palette-navy3 text-palette-goldLight rounded-xl font-bold hover:opacity-90 shadow-lg shadow-palette-navy1/30">
+                        <Icon name="upload" className="w-5 h-5"/> Importar Arquivo (.json)
+                    </button>
+                </div>
+            </div>
+            <div className={`p-6 rounded-2xl border ${bgCard} flex flex-col md:flex-row md:items-center gap-4`}>
+                <div className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full"><Icon name="database" className="w-6 h-6"/></div>
+                <div className="flex-1">
+                    <h3 className="font-bold">Backup Automático Ativo</h3>
+                    <p className={`text-sm ${txtMut}`}>Criado automaticamente a cada 1 hora. {lastAuto && `Último: ${lastAuto}`}</p>
+                </div>
+                <button onClick={() => criarBkp('Automático')} className="flex items-center gap-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-4 py-2 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors">
+                    <Icon name="refresh" className="w-4 h-4"/> Testar
+                </button>
+            </div>
+            <div className={`p-4 md:p-6 rounded-2xl border ${bgCard} overflow-x-auto`}>
+                <h3 className="text-lg font-bold mb-4">Histórico</h3>
+                {bkp.length === 0 ? <p className={txtMut}>Nenhum backup.</p> : (
+                    <table className="w-full text-left border-collapse min-w-[500px]">
+                        <thead>
+                            <tr className={`text-sm ${txtMut} border-b ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                                <th className="pb-3 font-medium">Arquivo</th>
+                                <th className="pb-3 font-medium">Tamanho</th>
+                                <th className="pb-3 font-medium">Tipo</th>
+                                <th className="pb-3 font-medium">Data</th>
+                                <th className="pb-3 font-medium text-right">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody className="text-sm">
+                            {bkp.map(b => (
+                                <tr key={b.id} className={`border-b ${isDark ? 'border-palette-borderDark/50' : 'border-palette-border'}`}>
+                                    <td className="py-3 font-mono text-xs">{b.nome_arquivo}</td>
+                                    <td className="py-3">{b.tamanho}</td>
+                                    <td className="py-3">
+                                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${b.tipo === 'Automático' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-palette-gold/20 text-palette-goldDark dark:text-palette-gold'}`}>{b.tipo}</span>
+                                    </td>
+                                    <td className={`py-3 ${txtMut}`}>{new Date(b.created_at).toLocaleString('pt-BR')}</td>
+                                    <td className="py-3 text-right space-x-2">
+                                        <button onClick={() => baixarBackup(b.id)} className="p-2 bg-palette-gold/20 text-palette-goldDark dark:text-palette-gold rounded-lg hover:bg-palette-gold/30" title="Baixar"><Icon name="download" className="w-4 h-4"/></button>
+                                        <button onClick={() => delBkp(b.id)} className="p-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50" title="Excluir"><Icon name="trash" className="w-4 h-4"/></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+        </div>
+    );
+
+    const Settings = () => (
+        <div className="space-y-6 animate-in max-w-2xl">
+            <div className={`p-6 rounded-2xl border ${bgCard}`}>
+                <h2 className="text-xl font-bold mb-6">Configurações</h2>
+                <div className="space-y-6">
+                    <div className={`flex justify-between items-center border-b pb-4 ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                        <div><p className="font-bold">Tema</p><p className={`text-sm ${txtMut}`}>Claro / Escuro</p></div>
+                        <Theme3D isDark={isDark} toggle={toggle}/>
+                    </div>
+                    <div className={`flex justify-between items-center border-b pb-4 ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                        <div><p className="font-bold">Sessão</p><p className={`text-sm ${txtMut}`}>Encerrar sessão</p></div>
+                        <button onClick={logout} className="flex items-center gap-2 px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"><Icon name="logout" className="w-4 h-4"/> Sair</button>
+                    </div>
+                    <div className={`flex justify-between items-center border-b pb-4 ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                        <div><p className="font-bold">Armazenamento</p><p className={`text-sm ${txtMut}`}>Limpar todos os dados locais</p></div>
+                        <button onClick={() => { if (confirm('⚠️ Isso apagará TODOS os dados. Continuar?')) { Object.values(LS_KEYS).forEach(k => localStorage.removeItem(k)); location.reload(); } }}
+                            className="flex items-center gap-2 px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 text-sm transition-colors">
+                            <Icon name="trash" className="w-4 h-4"/> Resetar Sistema
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div className={`p-6 rounded-2xl border ${bgCard} flex items-center justify-between`}>
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-gradient-to-br from-palette-gold to-palette-goldDark rounded-xl">
+                        <Icon name="tag" className="w-6 h-6 text-palette-navy3"/>
+                    </div>
+                    <div>
+                        <p className="font-bold">FinControl</p>
+                        <p className={`text-sm ${txtMut}`}>Sistema de Controle Financeiro Pessoal</p>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <p className={`text-xs ${txtMut}`}>Versão</p>
+                    <p className="text-lg font-bold text-palette-goldDark dark:text-palette-gold">v{VERSAO}</p>
+                </div>
+            </div>
+        </div>
+    );
+
+    const render = () => {
+        switch (tab) {
+            case 'dashboard': return <Dashboard/>;
+            case 'calendar': return <CalendarView isDark={isDark}/>;
+            case 'installments': return <Installments/>;
+            case 'reports': return <Reports/>;
+            case 'backups': return <Backups/>;
+            case 'settings': return <Settings/>;
+            default: return null;
+        }
+    };
+
+    const menu = [
+        { id:'dashboard', i:'dashboard', l:'Visão Geral' },
+        { id:'calendar', i:'calendar', l:'Calendário' },
+        { id:'installments', i:'dollar', l:'Contas e Parcelas' },
+        { id:'reports', i:'fileText', l:'Relatórios' },
+        { id:'backups', i:'database', l:'Backups' },
+        { id:'settings', i:'settings', l:'Configurações' }
+    ];
+
+    if (checking) return (
+        <div className={`min-h-screen flex flex-col items-center justify-center ${isDark ? 'bg-palette-black text-palette-gold' : 'bg-palette-bgMain text-palette-goldDark'} gap-3`}>
+            <div className="font-bold">Carregando sistema...</div>
+            <div className={`text-xs ${isDark ? 'text-palette-goldLight' : 'text-palette-grayText'}`}>v{VERSAO}</div>
+        </div>
+    );
+    if (!user) return <LoginScreen onLogin={handleLogin} isDark={isDark} toggleTheme={toggle}/>;
+
+    return (
+        <div className="flex h-screen font-sans overflow-hidden">
+            {sideOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setSideOpen(false)}/>}
+            <aside className={`fixed md:relative z-50 h-full w-64 border-r ${sideBg} p-6 flex flex-col transition-transform duration-300 ${sideOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+                <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-3 text-palette-goldDark dark:text-palette-gold font-bold text-xl">
+                        <Icon name="wallet" className="w-8 h-8"/><span>FinControl</span>
+                    </div>
+                    <button onClick={() => setSideOpen(false)} className={`md:hidden ${txtMut}`}><Icon name="x" className="w-6 h-6"/></button>
+                </div>
+                <nav className="flex flex-col gap-2 flex-1">
+                    {menu.map(m => (
+                        <button key={m.id} onClick={() => { setTab(m.id); setSideOpen(false); }} aria-label={m.l}
+                            className={`flex items-center gap-3 p-3 rounded-xl transition-all ${tab === m.id ? 'bg-gradient-to-r from-palette-gold/25 to-palette-goldLight/25 text-palette-goldDark dark:text-palette-gold border border-palette-gold/40' : `${txtMut} hover:bg-palette-gold/10 hover:text-palette-goldDark dark:hover:text-palette-gold`}`}>
+                            <Icon name={m.i} className="w-5 h-5"/><span className="font-medium">{m.l}</span>
+                        </button>
+                    ))}
+                </nav>
+                <div className={`pt-4 border-t ${isDark ? 'border-palette-borderDark' : 'border-palette-border'}`}>
+                    <div className={`flex items-center justify-between text-xs ${txtMut} mb-3`}>
+                        <span className="flex items-center gap-1"><Icon name="tag" className="w-3 h-3"/> Versão</span>
+                        <span className="font-mono font-bold text-palette-goldDark dark:text-palette-gold">v{VERSAO}</span>
+                    </div>
+                    <button onClick={logout} className={`w-full flex items-center gap-3 p-3 rounded-xl ${txtMut} hover:bg-red-100 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors`}>
+                        <Icon name="logout" className="w-5 h-5"/><span className="font-medium">Sair ({user})</span>
+                    </button>
+                </div>
+            </aside>
+
+            <main className="flex-1 overflow-y-auto p-4 md:p-8">
+                <header className="flex justify-between items-center mb-6 md:mb-8">
+                    <div className="flex items-center gap-4">
+                        <button onClick={() => setSideOpen(true)} className={`md:hidden p-2 rounded-lg ${isDark ? 'bg-palette-navy3 text-palette-gold' : 'bg-palette-bgAlt text-palette-navy1'}`} aria-label="Menu">
+                            <Icon name="menu" className="w-6 h-6"/>
+                        </button>
+                        <div>
+                            <h1 className="text-lg md:text-2xl font-bold capitalize">{menu.find(m => m.id === tab)?.l || 'Painel'}</h1>
+                            <p className={`text-xs md:text-sm ${txtMut}`}>Bem-vindo, {user}! <span className="ml-2 opacity-60">v{VERSAO}</span></p>
+                        </div>
+                    </div>
+                    <Theme3D isDark={isDark} toggle={toggle}/>
+                </header>
+                {render()}
+            </main>
+
+            <Modal isOpen={modal} onClose={() => setModal(false)} title="Nova Conta Parcelada" isDark={isDark}>
+                <form onSubmit={addInst} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Descrição</label>
+                        <input type="text" required value={form.descricao} onChange={e => setForm({ ...form, descricao: e.target.value })}
+                            className={`w-full border rounded-lg p-3 outline-none focus:border-palette-gold transition-colors ${inputBg}`} placeholder="Ex: Notebook"/>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Nº Parcelas</label>
+                            <input type="number" min="1" required value={form.total} onChange={e => setForm({ ...form, total: e.target.value })}
+                                className={`w-full border rounded-lg p-3 outline-none focus:border-palette-gold transition-colors ${inputBg}`} placeholder="12"/>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Valor Total (R$)</label>
+                            <input type="number" step="0.01" min="0.01" required value={form.valorTotal} onChange={e => setForm({ ...form, valorTotal: e.target.value })}
+                                className={`w-full border rounded-lg p-3 outline-none focus:border-palette-gold transition-colors ${inputBg}`} placeholder="2500.00"/>
+                        </div>
+                    </div>
+                    <div className="pt-4 flex justify-end gap-3">
+                        <button type="button" onClick={() => setModal(false)} className={`px-4 py-2 rounded-lg ${txtMut}`}>Cancelar</button>
+                        <button type="submit" className="px-6 py-2 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 rounded-lg font-bold hover:opacity-90">Salvar</button>
+                    </div>
+                </form>
+            </Modal>
+
+            <Modal isOpen={importModal} onClose={() => { setImportModal(false); setImportFile(null); setImportMsg(null); }} title="Importar Backup" isDark={isDark}>
+                <div className="space-y-4">
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-palette-gold/40 bg-palette-gold/5' : 'border-palette-gold/60 bg-palette-bgAlt'}`}>
+                        <p className="text-xs"><strong className="text-palette-goldDark dark:text-palette-gold">⚠️ Atenção:</strong> A importação adiciona ou substitui dados no navegador.</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-2">Modo</label>
+                        <div className={`flex rounded-xl p-1 ${isDark ? 'bg-palette-navy3' : 'bg-palette-bgAlt'}`}>
+                            <button type="button" onClick={() => setImportModo('merge')}
+                                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${importModo === 'merge' ? 'bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3' : txtMut}`}>Mesclar</button>
+                            <button type="button" onClick={() => setImportModo('replace')}
+                                className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${importModo === 'replace' ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white' : txtMut}`}>Substituir</button>
+                        </div>
+                    </div>
+                    <div onClick={() => fileInputRef.current?.click()}
+                        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+                        onDragLeave={() => setDragActive(false)}
+                        onDrop={handleFileDrop}
+                        className={`drop-zone ${dragActive ? 'active' : ''} rounded-xl p-8 text-center cursor-pointer`}>
+                        <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden"
+                            onChange={(e) => { if (e.target.files[0]) { setImportFile(e.target.files[0]); setImportMsg(null); } }}/>
+                        <Icon name="upload" className="w-10 h-10 mx-auto mb-3 text-palette-goldDark dark:text-palette-gold"/>
+                        {importFile ? (
+                            <div>
+                                <p className="font-bold text-green-600 dark:text-green-400">✓ {importFile.name}</p>
+                                <p className={`text-xs ${txtMut} mt-1`}>{(importFile.size / 1024).toFixed(2)} KB</p>
+                            </div>
+                        ) : (
+                            <div>
+                                <p className="font-medium">Clique ou arraste o arquivo aqui</p>
+                                <p className={`text-xs ${txtMut} mt-1`}>Apenas arquivos .json</p>
+                            </div>
+                        )}
+                    </div>
+                    {importMsg && (
+                        <div className={`p-3 rounded-lg text-sm border ${importMsg.tipo === 'success' ? 'bg-green-100 border-green-300 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-400' : 'bg-red-100 border-red-300 text-red-700 dark:bg-red-900/30 dark:border-red-800 dark:text-red-400'}`}>
+                            {importMsg.texto}
+                        </div>
+                    )}
+                    <div className="pt-2 flex justify-end gap-3">
+                        <button type="button" onClick={() => { setImportModal(false); setImportFile(null); setImportMsg(null); }} className={`px-4 py-2 rounded-lg ${txtMut}`}>Cancelar</button>
+                        <button type="button" onClick={handleImportSubmit} disabled={importLoading || !importFile}
+                            className="px-6 py-2 bg-gradient-to-r from-palette-gold to-palette-goldDark text-palette-navy3 rounded-lg font-bold disabled:opacity-50 flex items-center gap-2">
+                            {importLoading ? 'Importando...' : (<><Icon name="upload" className="w-4 h-4"/> Importar</>)}
+                        </button>
+                    </div>
+                </div>
+            </Modal>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
